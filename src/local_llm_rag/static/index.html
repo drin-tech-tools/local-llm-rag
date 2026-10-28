@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local LLM RAG</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    main { max-width: 820px; margin: 0 auto; padding: 32px 16px; }
+    h1 { margin: 0 0 4px; }
+    .muted { color: #94a3b8; font-size: 14px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0; }
+    button { background: #6366f1; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; font: inherit; }
+    button:disabled { opacity: .5; cursor: default; }
+    button.ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; padding: 6px 10px; font-size: 13px; }
+    input[type=text], select { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: inherit; min-width: 0; font: inherit; }
+    code { background: #0f172a; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .status { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex: none; background: #94a3b8; }
+    .dot.ok { background: #22c55e; } .dot.bad { background: #f87171; }
+    .docs { list-style: none; padding: 0; margin: 12px 0 0; }
+    .docs li { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid #334155; font-size: 14px; }
+    .badge { font-size: 12px; color: #fbbf24; border: 1px solid #fbbf24; border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+    .msg { white-space: pre-wrap; line-height: 1.5; margin: 12px 0; }
+    .user { color: #a5b4fc; }
+    .src { font-size: 13px; color: #94a3b8; border-left: 2px solid #6366f1; padding-left: 8px; margin: 6px 0; white-space: normal; }
+    .timing { font-size: 12px; color: #64748b; margin-top: 4px; }
+    .error { color: #f87171; }
+    label.ask { display: block; margin-bottom: 12px; }
+    label.ask select { display: block; width: 100%; margin-top: 4px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Local LLM RAG</h1>
+  <p class="muted" style="margin-top: 0">Chat with your PDFs on models running on your own machine. Answers cite source pages.</p>
+
+  <div class="card">
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <div style="flex: 1" id="status">Checking model server…</div>
+      <button type="button" class="ghost" id="recheck">Recheck</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <input type="file" id="file" accept="application/pdf">
+    <p class="muted" id="upload-status" hidden></p>
+    <ul class="docs" id="docs"></ul>
+  </div>
+
+  <div class="card">
+    <label class="muted ask">Ask about
+      <select id="scope"><option value="">All documents</option></select>
+    </label>
+    <p class="muted" id="empty">Ask something like “Summarize the key findings.”</p>
+    <div id="messages"></div>
+    <p class="error" id="error" hidden></p>
+    <form class="row" id="ask-form">
+      <input type="text" id="question" placeholder="Ask a question about your documents" autocomplete="off">
+      <button id="ask">Ask</button>
+    </form>
+  </div>
+</main>
+
+<script>
+  // Everything user- or PDF-provided goes through textContent, never innerHTML.
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...children) => {
+    const node = Object.assign(document.createElement(tag), props);
+    node.append(...children);
+    return node;
+  };
+  const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+  function showError(message) {
+    $("error").textContent = message;
+    $("error").hidden = !message;
+  }
+
+  async function checkHealth() {
+    $("dot").className = "dot";
+    $("status").textContent = "Checking model server…";
+    let h;
+    try {
+      h = await (await fetch("/api/health")).json();
+    } catch {
+      h = { ok: false, error: "Could not reach this app's API." };
+    }
+    $("dot").className = `dot ${h.ok ? "ok" : "bad"}`;
+    const status = $("status");
+    status.replaceChildren();
+    if (h.ok) {
+      status.append("Chat ", el("code", { textContent: h.chat_model.name }),
+        " · Embeddings ", el("code", { textContent: h.embed_model.name }),
+        el("div", { className: "muted", textContent: h.base_url }));
+    } else if (h.error) {
+      status.append(h.error, el("div", { className: "muted", textContent: "See docs/LOCAL_SETUP.md, step 2." }));
+    } else {
+      status.append("Missing models: ");
+      for (const m of [h.chat_model, h.embed_model].filter((m) => !m.available)) {
+        status.append(el("code", { textContent: `ollama pull ${m.name}`, style: "margin-right: 6px" }));
+      }
+    }
+  }
+
+  async function refreshDocs(selectId) {
+    const res = await fetch("/api/documents");
+    if (!res.ok) return;
+    const { documents } = await res.json();
+    const list = $("docs");
+    list.replaceChildren(...documents.map((d) => {
+      const label = el("span", {}, d.name,
+        el("span", { className: "muted", textContent: ` · ${d.pages} pages · ${d.chunks} chunks` }));
+      if (d.stale) label.append(el("span", { className: "badge", textContent: `embedded with ${d.embed_model}; re-upload` }));
+      const del = el("button", { type: "button", className: "ghost", textContent: "Delete" });
+      del.onclick = async () => {
+        await fetch(`/api/documents/${encodeURIComponent(d.id)}`, { method: "DELETE" });
+        await refreshDocs();
+      };
+      return el("li", {}, label, del);
+    }));
+
+    const scope = $("scope");
+    const current = selectId ?? scope.value;
+    scope.replaceChildren(el("option", { value: "", textContent: "All documents" }),
+      ...documents.filter((d) => !d.stale).map((d) => el("option", { value: d.id, textContent: d.name })));
+    scope.value = [...scope.options].some((o) => o.value === current) ? current : "";
+  }
+
+  $("file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const status = $("upload-status");
+    showError("");
+    status.hidden = false;
+    status.textContent = `Reading and embedding ${file.name}…`;
+    $("file").disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? data.detail ?? "Upload failed");
+      const d = data.document;
+      status.textContent = `${d.name}: ${d.pages} pages, ${d.chunks} chunks, embedded in ${seconds(data.embed_ms)}.`;
+      await refreshDocs(d.id);
+    } catch (err) {
+      status.hidden = true;
+      showError(err.message);
+    } finally {
+      $("file").disabled = false;
+    }
+  });
+
+  function addMessage(role, text) {
+    $("empty").hidden = true;
+    const body = el("span", { textContent: text });
+    const extra = el("div");
+    const msg = el("div", { className: "msg" },
+      el("strong", { className: role === "user" ? "user" : "", textContent: role === "user" ? "You: " : "Assistant: " }),
+      body, extra);
+    $("messages").append(msg);
+    return { msg, body, extra };
+  }
+
+  function renderSources(target, sources) {
+    for (const s of sources) {
+      const cut = s.snippet.length >= 300 ? "…" : "";
+      target.append(el("div", { className: "src",
+        textContent: `[${s.n}] ${s.document}, page ${s.page} (score ${s.score.toFixed(2)}): ${s.snippet}${cut}` }));
+    }
+  }
+
+  // Decode base64(UTF-8 JSON) from X-Rag-Sources (atob alone is Latin-1, not UTF-8-safe).
+  function decodeSources(header) {
+    const bytes = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  $("ask-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const question = $("question").value.trim();
+    if (!question) return;
+    $("question").value = "";
+    showError("");
+    addMessage("user", question);
+    const answer = addMessage("assistant", "Thinking… (the first answer loads the model)");
+    $("ask").disabled = true;
+    const started = performance.now();
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, document_id: $("scope").value || null }),
+      });
+      if ((res.headers.get("content-type") ?? "").includes("application/json")) {
+        const data = await res.json();
+        if (!res.ok) {
+          answer.msg.remove();
+          const detail = Array.isArray(data.detail) ? data.detail[0]?.msg : data.detail;
+          throw new Error(data.error ?? detail ?? "Chat failed");
+        }
+        answer.body.textContent = data.answer;
+        return;
+      }
+
+      const header = res.headers.get("X-Rag-Sources");
+      const model = res.headers.get("X-Chat-Model") ?? "model";
+      const firstTokenMs = Number(res.headers.get("X-First-Token-Ms") ?? 0);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      answer.body.textContent = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+        answer.body.textContent = text;
+      }
+      if (header) renderSources(answer.extra, decodeSources(header));
+      answer.extra.append(el("div", { className: "timing",
+        textContent: `${model} · first token ${seconds(firstTokenMs)} · total ${seconds(performance.now() - started)}` }));
+    } catch (err) {
+      if (answer.body.textContent.startsWith("Thinking")) answer.msg.remove();
+      showError(err.message);
+    } finally {
+      $("ask").disabled = false;
+    }
+  });
+
+  $("recheck").addEventListener("click", checkHealth);
+  checkHealth();
+  refreshDocs();
+</script>
+</body>
+</html>

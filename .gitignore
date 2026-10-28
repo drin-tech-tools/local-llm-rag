@@ -1,8 +1,19 @@
-node_modules
-.next
-.env*
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Local settings
+.env
+.env.*
 !.env.example
-next-env.d.ts
-*.tsbuildinfo
-# Local vector store (your uploaded documents and their embeddings)
+
+# Local data: uploaded documents' metadata and the Chroma vector store
 data/
+
+.DS_Store
