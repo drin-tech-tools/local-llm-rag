@@ -1,0 +1,44 @@
+[project]
+name = "local-llm-rag"
+version = "0.1.0"
+description = "Chat with your PDFs using self-hosted models (Ollama, vLLM, llama.cpp) behind an OpenAI-compatible API."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "openai>=1.40",
+    "chromadb>=0.5",
+    "pypdf>=4.3",
+    "pydantic-settings>=2.4",
+]
+
+[project.scripts]
+serve = "local_llm_rag.cli:serve"
+doctor = "local_llm_rag.doctor:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/local_llm_rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

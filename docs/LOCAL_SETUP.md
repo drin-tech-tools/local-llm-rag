@@ -10,30 +10,27 @@ Everything you need to run Local LLM RAG on a Mac, from a clean machine to a wor
 | --- | --- | --- | --- |
 | Chip | Apple Silicon (M1 or newer) | Apple M3 | `uname -m` → `arm64` |
 | Memory | 8 GB (3B model); 16 GB recommended (8B model) | 16 GB | `sysctl -n hw.memsize` |
-| Free disk | 8 GB (models ~5.2 GB + app ~0.5 GB) | 62 GB free | `df -h /` |
+| Free disk | 8 GB (models ~5.2 GB + Python environment ~0.5 GB) | 62 GB free | `df -h /` |
 | macOS | 14 Sonoma or newer | 26.6 | `sw_vers -productVersion` |
-| Node.js | 20 or newer (22 LTS recommended) | install in step 1 | `node -v` |
+| uv | any recent | install in step 1 | `uv --version` |
+| Python | 3.11+ (uv installs 3.12 for you) | installed by uv | `uv run python --version` |
 | Git | any recent | ships with Xcode tools | `git --version` |
 | Ollama | latest | install in step 2 | `ollama --version` |
 | Network | only for the one-time downloads | | |
 
-Intel Macs are not recommended: Ollama runs on the CPU only there and answers are too slow for a demo.
+You do not need to install Python yourself. uv reads `.python-version` and downloads Python 3.12 into the project. Intel Macs are not recommended: Ollama runs on the CPU only there and answers are too slow for a demo.
 
-## 1. Install Node.js 22
-
-Skip this if `node -v` already prints v20 or newer.
+## 1. Install uv
 
 ```bash
 # Homebrew, if you don't have it yet (https://brew.sh)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-brew install node@22
-echo 'export PATH="/opt/homebrew/opt/node@22/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-node -v    # v22.x
+brew install uv
+uv --version
 ```
 
-Using nvm instead? The repo has an `.nvmrc`, so `nvm install && nvm use` picks the right version.
+Without Homebrew: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then open a new terminal.
 
 ## 2. Install and start Ollama
 
@@ -77,21 +74,21 @@ ollama run llama3.1:8b "Say hello in five words."
 ```bash
 git clone https://github.com/drin-tech-tools/local-llm-rag.git
 cd local-llm-rag
-npm install
-npm run doctor
+uv sync          # downloads Python 3.12 if needed and installs dependencies into .venv
+uv run doctor
 ```
 
-`npm run doctor` checks Node, memory, disk, the model server and both models, runs one embedding and one chat request, and leaves the chat model warm. Expected output ends with `All checks passed.` Each failure line says what to run.
+`uv run doctor` checks Python, memory, disk, the model server and both models, runs one embedding and one chat request, and leaves the chat model warm. Expected output ends with `All checks passed.` Each failure line says what to run.
 
 Then start the app:
 
 ```bash
-npm run dev
+uv run serve
 ```
 
-Open **http://localhost:3000** (or http://127.0.0.1:3000). The status bar should show a green dot with `llama3.1:8b` and `nomic-embed-text`.
+Open **http://127.0.0.1:8000** (or http://localhost:8000). The status bar should show a green dot with `llama3.1:8b` and `nomic-embed-text`. Stop the app with Ctrl+C.
 
-No `.env.local` is needed with the defaults. To change a setting, `cp .env.example .env.local` and uncomment the line. `npm run dev` and `npm run doctor` both read it; restart `npm run dev` after editing.
+No `.env.local` is needed with the defaults. To change a setting, `cp .env.example .env.local` and uncomment the line. `uv run serve` and `uv run doctor` both read it; restart `uv run serve` after editing.
 
 ## 5. Try it
 
@@ -99,11 +96,11 @@ No `.env.local` is needed with the defaults. To change a setting, `cp .env.examp
 2. Wait for "N pages, M chunks, embedded in X s". A 40-page PDF usually takes a few seconds.
 3. Ask a question. Sources appear under the answer with page numbers, followed by the timing line.
 
-Documents are stored in `data/store.json`. Delete them in the UI, or delete that file to start over.
+Documents are stored in `data/` (`documents.sqlite3` and a `chroma/` folder). Delete them in the UI, or stop the app and delete the `data/` folder to start over.
 
 ## Choosing a model
 
-Set `CHAT_MODEL` in `.env.local`, pull the model, and restart `npm run dev`. Sizes and speeds are approximate for 4-bit models on Apple Silicon. Model names are from the [Ollama library](https://ollama.com/library); check there for current tags.
+Set `CHAT_MODEL` in `.env.local`, pull the model, and restart `uv run serve`. Sizes and speeds are approximate for 4-bit models on Apple Silicon. Model names are from the [Ollama library](https://ollama.com/library); check there for current tags.
 
 | Model | Download | Fits on | Approx. speed on M3 Air | Notes |
 | --- | --- | --- | --- | --- |
@@ -114,15 +111,15 @@ Set `CHAT_MODEL` in `.env.local`, pull the model, and restart `npm run dev`. Siz
 
 Avoid "thinking" models (`qwen3`, `deepseek-r1`) for the demo: they reason silently before answering, so the first visible word can take a minute.
 
-Changing `EMBED_MODEL` is different: vectors from different embedding models are not comparable, so existing documents are marked "re-upload" and skipped until you upload them again. Keep a 768-dimension model if you plan to move to pgvector with the schema in [ARCHITECTURE.md](ARCHITECTURE.md).
+Changing `EMBED_MODEL` is different: vectors from different embedding models are not comparable, so existing documents are marked "re-upload" and skipped until you upload them again.
 
 ## Before a demo (16 GB MacBook Air)
 
 A 16 GB Air runs an 8B model comfortably only when memory is not already full.
 
-- [ ] Quit heavy apps and close extra browser tabs. Aim for at least 6 GB free (`memory_pressure | tail -1` shows the free percentage; `npm run doctor` warns when it is low).
+- [ ] Quit heavy apps and close extra browser tabs. Aim for at least 6 GB free (`memory_pressure | tail -1` shows the free percentage; `uv run doctor` warns when it is low).
 - [ ] Plug in the charger and turn off Low Power Mode. The Air has no fan and slows down on battery under sustained load.
-- [ ] Run `npm run doctor` a minute before you present, so the first question doesn't pay the model load time.
+- [ ] Run `uv run doctor` a minute before you present, so the first question doesn't pay the model load time.
 - [ ] Check `ollama ps`: it should list `llama3.1:8b` as loaded.
 - [ ] Have the PDF already uploaded, plus one spare to upload live.
 
@@ -132,13 +129,13 @@ A 16 GB Air runs an 8B model comfortably only when memory is not already full.
 | --- | --- |
 | Red dot: "Cannot reach the model server" | Open the Ollama app (or run `ollama serve`). Check `curl http://localhost:11434/v1/models`. |
 | Red dot: "Missing models" | Run the `ollama pull …` commands the status bar shows, then click **Recheck**. |
-| First answer takes 30–60 s, later ones are quick | Normal: the model is loading into memory. Run `npm run doctor` first, and set `OLLAMA_KEEP_ALIVE` (step 2). |
-| "No answer from llama3.1:8b within 120s" | Memory is too full and macOS is swapping. Quit apps, or switch to `CHAT_MODEL=llama3.2:3b`. |
+| First answer takes 30–60 s, later ones are quick | Normal: the model is loading into memory. Run `uv run doctor` first, and set `OLLAMA_KEEP_ALIVE` (step 2). |
+| "No answer from … within 120s" | Memory is too full and macOS is swapping. Quit apps, or switch to `CHAT_MODEL=llama3.2:3b`. |
 | Answers are slow throughout (under 5 tokens/s) | Same cause: low free memory, battery or Low Power Mode. See the demo checklist. |
-| "No extractable text (scanned PDF?)" | The PDF is images only. Use a text PDF, or OCR it first (Preview can't; Adobe Acrobat or `ocrmypdf` can). |
+| "No extractable text (scanned PDF?)" | The PDF is images only. Use a text PDF, or OCR it first (for example with `ocrmypdf`). |
 | Documents show "re-upload" | `EMBED_MODEL` changed since they were uploaded. Upload them again. |
-| `npm run dev` fails on `node` version | `node -v` must be 20+; see step 1. |
-| Port 3000 is busy | `npm run dev -- -p 3001` |
+| `uv sync` fails downloading Python | Check your network, or install Python 3.12 with `brew install python@3.12` and run `uv sync` again. |
+| Port 8000 is busy | `uv run serve --port 8001` |
 
 ## Pointing at a team model server
 
@@ -151,4 +148,4 @@ CHAT_MODEL=<model name the server exposes>
 EMBED_MODEL=<embedding model the server exposes>
 ```
 
-Then run `npm run doctor`, re-upload documents if the embedding model changed, and start the app.
+Then run `uv run doctor`, re-upload documents if the embedding model changed, and start the app.
